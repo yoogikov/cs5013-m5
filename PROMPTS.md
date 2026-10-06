@@ -414,3 +414,144 @@ Re-ran `make mutation`: the **line-13 conditional-boundary mutant is now KILLED*
 | Whole `TaxCalculator` | 15 / 42 (36%) | 26 / 42 (62%) | **28 / 42 (67%)** |
 
 **Usefulness:** Mutation testing felt more useful than coverage. Line coverage already showed `computeIncomeTax`'s guard line as covered, yet a zero-income bug could slip through. PIT pointed to that exact boundary, and it also showed which survivors were equivalent mutants that no test can kill.
+
+---
+
+# Session 5B: Auto-documentation
+
+## Part A – JavaDoc for one public method
+
+Chosen method: **`OrderBook.create(String customerId, BigDecimal amount)`**. It has the richest contract of the five methods: two `IllegalArgumentException` cases, a generated id, an initial status of `NEW`, a creation timestamp, and the side effect of storing the order.
+
+### Prompt 1 – generate (sent to an independent AI chat agent)
+
+````
+Generate JavaDoc for the following method. Rules:
+- One-line summary in imperative mood.
+- Describe the contract, not the implementation.
+- @param for each parameter with type and constraints.
+- @return with what is returned.
+- @throws for each declared or unchecked exception the
+  caller should be aware of.
+- If any behaviour is not evident from the code, write
+  "TODO" and skip.
+
+```java
+    public Order create(String customerId, BigDecimal amount) {
+        if (customerId == null || customerId.isBlank()) {
+            throw new IllegalArgumentException("customerId required");
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("amount must be > 0");
+        }
+        Order o = new Order(UUID.randomUUID().toString(),
+                            customerId, amount,
+                            OrderStatus.NEW, Instant.now());
+        store.put(o.id(), o);
+        return o;
+    }
+```
+````
+
+### AI reply 1 (verbatim)
+
+> ```java
+> /**
+>  * Create a new order for the given customer and amount, and register it in the store.
+>  *
+>  * <p>The new order has a freshly generated unique ID (a random UUID string), the status
+>  * {@link OrderStatus#NEW}, and a creation timestamp taken from the current system clock.
+>  * The returned order is the same instance that was put in the store, so later lookups
+>  * by {@code id()} should find it.
+>  *
+>  * <p>Thread safety: TODO
+>  * <p>Persistence/durability of the store: TODO
+>  * <p>Whether the customer must exist or be validated beyond being non-blank: TODO
+>  * <p>Currency, scale and rounding rules for {@code amount}: TODO
+>  *
+>  * @param customerId {@code String}: identifier of the customer placing the order;
+>  *                   must not be {@code null}, empty, or whitespace-only
+>  * @param amount     {@code BigDecimal}: order amount; must not be {@code null} and
+>  *                   must be strictly greater than zero
+>  * @return the newly created {@link Order}, never {@code null}, with status
+>  *         {@link OrderStatus#NEW}, a unique generated ID, the given
+>  *         {@code customerId} and {@code amount}, and the creation time
+>  * @throws IllegalArgumentException if {@code customerId} is {@code null} or blank,
+>  *                                  or if {@code amount} is {@code null} or not positive
+>  * @throws RuntimeException TODO (exceptions the underlying store may throw on
+>  *                          {@code put} are not evident from this code)
+>  */
+> public Order create(String customerId, BigDecimal amount) {
+> ```
+>
+> Notes on the TODOs:
+> - **Thread safety / persistence:** these depend on what `store` is (for example a `HashMap` or a `ConcurrentHashMap`, in memory or backed by a database). The method doesn't show this.
+> - **Store exceptions:** `store.put` could throw things like `UnsupportedOperationException` or a persistence error, depending on how it's implemented. If you know the store's type, replace the `@throws RuntimeException` TODO with the real exceptions, or delete it if there are none.
+> - **Amount semantics:** the code only checks that the amount is positive. Any currency or decimal-scale rules would have to be enforced somewhere else.
+
+I pasted this JavaDoc into `src/OrderBook.java` above `create` unchanged; it compiles.
+
+### Prompt 2 – verification pass 1 (same chat)
+
+````
+Given the JavaDoc above and the method body below,
+identify any statement in the JavaDoc that is inconsistent
+with the code. Do not fix; just list.
+
+```java
+<create method body, as in Prompt 1>
+```
+````
+
+### AI reply 2 (verbatim)
+
+> Nothing in the JavaDoc directly contradicts the code. A few statements do claim more than the code can guarantee:
+>
+> 1. **"a freshly generated unique ID" / "a unique generated ID"**: `UUID.randomUUID()` makes collisions extremely unlikely, but it doesn't guarantee uniqueness. Nothing in the method checks for an existing key either. If two IDs ever did collide, `store.put` would silently replace the older order.
+>
+> 2. **"so later lookups by `id()` should find it"**: the code only shows that the order is put in the store. Whether it can still be found later depends on how `store` behaves (eviction, expiry, removal by other code), and that isn't visible here.
+>
+> 3. **"with ... the given `customerId` and `amount`"** and **"with status `OrderStatus#NEW`"** (in `@return`): the code passes these values to the `Order` constructor. It doesn't show that the constructor keeps them unchanged. For example, the constructor could trim the ID or rescale the amount.
+>
+> 4. **`@throws RuntimeException`**: no `RuntimeException` (other than `IllegalArgumentException`) is thrown or declared in this method. Even with the TODO attached, the tag suggests a contract that the code doesn't show.
+>
+> The parameter rules (non-null and not blank; non-null and strictly positive), the `IllegalArgumentException` conditions, the order being returned as the same instance that was stored, and the timestamp coming from `Instant.now()` all match the code.
+
+### My fixes after pass 1
+
+| # | Flag | Action |
+|---|---|---|
+| 1 | "unique ID" overclaims | **Fixed**: reworded to "a randomly generated ID (a random UUID string)" in both the body and `@return`. |
+| 2 | "later lookups … should find it" overclaims | **Fixed**: reworded to "the same instance that is stored in this order book under its `id()`", which is exactly what the code does. |
+| 3 | Unclear whether `Order` keeps `customerId`/`amount`/status unchanged | **Kept; false positive.** I checked `src/Order.java`: it is a plain record with no compact constructor, so the values are stored unchanged. I sent the record definition with the next verification. |
+| 4 | `@throws RuntimeException TODO` documents an exception that isn't thrown | **Fixed**: removed the tag. |
+
+### Prompt 3 – verification pass 2 (same chat)
+
+````
+I revised the JavaDoc. Given the JavaDoc above and the method body below,
+identify any statement in the JavaDoc that is inconsistent
+with the code. Do not fix; just list.
+
+<revised JavaDoc + create method body, plus the Order record definition for reference>
+````
+
+### AI reply 3 (verbatim)
+
+> I don't see any statement in the revised JavaDoc that is inconsistent with the code. Since `Order` is a plain record with no compact constructor, the ID, `customerId`, `amount`, status and timestamp are stored exactly as passed, so the `@return` description now holds.
+>
+> Two small points. Neither is a contradiction:
+>
+> 1. **"stored in this order book"**: the code only refers to a field called `store`. The method doesn't show whether the enclosing class is an "order book" or what type `store` is. The wording is consistent with the code, but it adds a term the code doesn't confirm.
+>
+> 2. **The `@throws RuntimeException` TODO is gone**: this doesn't make anything inconsistent. It does mean the doc no longer mentions that `store.put` might throw. Your original rules asked for a TODO when behaviour isn't evident from the code, and what `store.put` can throw still isn't evident here.
+>
+> Everything else matches the code: the parameter constraints, the `IllegalArgumentException` conditions, the random UUID ID, the `NEW` status, the timestamp from `Instant.now()`, and the returned order being the same instance that was put in the store under `id()`.
+
+**Result: no inconsistencies, so the loop stops after 2 verification passes.** Neither leftover note needs a change:
+- The enclosing class is `OrderBook`, so "this order book" is accurate.
+- `store` is a `private final ConcurrentHashMap`. Its `put` only throws (an NPE) on a null key or value, and neither `o.id()` nor `o` can be null here. So no `@throws` or TODO is needed for it.
+
+Final JavaDoc as committed: see `src/OrderBook.java`, above `create`.
+
+**First-pass tally (for Part D):** the self-check flagged 4 items on the first pass. 3 were real overclaims or inconsistencies (unique ID, later lookups, the phantom `@throws RuntimeException`) and 1 was a false positive (the record keeps its fields unchanged).

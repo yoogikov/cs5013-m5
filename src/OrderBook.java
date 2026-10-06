@@ -20,6 +20,29 @@ public class OrderBook {
         return Optional.ofNullable(store.get(id));
     }
 
+    /**
+     * Create a new order for the given customer and amount, and register it in the store.
+     *
+     * <p>The new order has a randomly generated ID (a random UUID string), the status
+     * {@link OrderStatus#NEW}, and a creation timestamp taken from the current system clock.
+     * The returned order is the same instance that is stored in this order book under
+     * its {@code id()}.
+     *
+     * <p>Thread safety: TODO
+     * <p>Persistence/durability of the store: TODO
+     * <p>Whether the customer must exist or be validated beyond being non-blank: TODO
+     * <p>Currency, scale and rounding rules for {@code amount}: TODO
+     *
+     * @param customerId {@code String}: identifier of the customer placing the order;
+     *                   must not be {@code null}, empty, or whitespace-only
+     * @param amount     {@code BigDecimal}: order amount; must not be {@code null} and
+     *                   must be strictly greater than zero
+     * @return the newly created {@link Order}, never {@code null}, with status
+     *         {@link OrderStatus#NEW}, a randomly generated UUID string as its ID, the given
+     *         {@code customerId} and {@code amount}, and the creation time
+     * @throws IllegalArgumentException if {@code customerId} is {@code null} or blank,
+     *                                  or if {@code amount} is {@code null} or not positive
+     */
     public Order create(String customerId, BigDecimal amount) {
         if (customerId == null || customerId.isBlank()) {
             throw new IllegalArgumentException("customerId required");
